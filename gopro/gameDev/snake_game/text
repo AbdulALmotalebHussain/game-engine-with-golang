@@ -1,0 +1,146 @@
+package engine
+
+import (
+    "fmt"
+    "github.com/veandco/go-sdl2/sdl"
+    "sync"
+    "time"
+)
+
+const (
+    WindowWidth  = 800
+    WindowHeight = 600
+)
+
+// Game interface defines the methods required for a game
+type Game interface {
+    Init() error
+    Run()
+    CleanUp()
+}
+
+// GameObject interface defines the methods required for a game object
+type GameObject interface {
+    Draw(renderer *sdl.Renderer)
+}
+
+// InputHandler interface defines the methods required for input handling
+type InputHandler interface {
+    HandleInput(player GameObject)
+}
+
+type game struct {
+    window   *sdl.Window
+    renderer *sdl.Renderer
+    running  bool
+    player   GameObject
+    input    InputHandler
+}
+
+func NewGame(player GameObject, input InputHandler) Game {
+    return &game{player: player, input: input}
+}
+
+func (g *game) Init() error {
+    var err error
+    if err = sdl.Init(sdl.INIT_EVERYTHING); err != nil {
+        return fmt.Errorf("could not initialize SDL: %v", err)
+    }
+
+    g.window, err = sdl.CreateWindow("Go Game Engine", sdl.WINDOWPOS_UNDEFINED, sdl.WINDOWPOS_UNDEFINED, WindowWidth, WindowHeight, sdl.WINDOW_SHOWN)
+    if err != nil {
+        return fmt.Errorf("could not create window: %v", err)
+    }
+
+    g.renderer, err = sdl.CreateRenderer(g.window, -1, sdl.RENDERER_ACCELERATED)
+    if err != nil {
+        return fmt.Errorf("could not create renderer: %v", err)
+    }
+
+    g.running = true
+    return nil
+}
+
+func (g *game) Run() {
+    var wg sync.WaitGroup
+    wg.Add(3)
+
+    // Channel to signal termination
+    done := make(chan struct{})
+
+    // Event handling goroutine
+    go func() {
+        defer wg.Done()
+        for g.running {
+            select {
+            case <-done:
+                return
+            default:
+                g.handleEvents()
+            }
+        }
+    }()
+
+    // Update goroutine
+    go func() {
+        defer wg.Done()
+        ticker := time.NewTicker(16 * time.Millisecond)
+        defer ticker.Stop()
+        for g.running {
+            select {
+            case <-done:
+                return
+            case <-ticker.C:
+                g.update()
+            }
+        }
+    }()
+
+    // Render goroutine
+    go func() {
+        defer wg.Done()
+        ticker := time.NewTicker(16 * time.Millisecond)
+        defer ticker.Stop()
+        for g.running {
+            select {
+            case <-done:
+                return
+            case <-ticker.C:
+                g.render()
+            }
+        }
+    }()
+
+    wg.Wait()
+}
+
+func (g *game) handleEvents() {
+    for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
+        switch t := event.(type) {
+        case *sdl.QuitEvent:
+            g.running = false
+        case *sdl.KeyboardEvent:
+            if t.Keysym.Sym == sdl.K_ESCAPE && t.State == sdl.PRESSED {
+                g.running = false
+            }
+        }
+    }
+}
+
+func (g *game) update() {
+    g.input.HandleInput(g.player)
+}
+
+func (g *game) render() {
+    g.renderer.SetDrawColor(0, 0, 0, 255)
+    g.renderer.Clear()
+    g.player.Draw(g.renderer)
+    g.renderer.Present()
+}
+
+func (g *game) CleanUp() {
+    g.renderer.Destroy()
+    g.window.Destroy()
+    sdl.Quit()
+}
+
